@@ -4,7 +4,7 @@
    - The libraries (Supabase, Chart.js) and fonts: use the saved copy, since their versions never change.
    - Your budget data (Supabase) is never saved here; it always comes fresh from the database. */
 
-const CACHE = "budget-v5";
+const CACHE = "budget-v6";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -38,8 +38,10 @@ self.addEventListener("fetch", (event) => {
 
   if (url.origin === self.location.origin) {
     // App files: internet first, saved copy if offline.
+    // "no-cache" makes the browser check with GitHub for a newer version every time,
+    // instead of reusing a copy it kept from the last few minutes.
     event.respondWith(
-      fetch(request)
+      fetch(request.url, { cache: "no-cache", credentials: "same-origin" })
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();

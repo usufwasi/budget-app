@@ -1907,24 +1907,20 @@ async function deleteCategory() {
 // True when this page is running inside the Android app rather than a browser.
 // The Android app provides "androidBridge" for talking to its native code.
 const IS_ANDROID_APP = Boolean(window.androidBridge);
-const CAPACITOR_CORE_URL = "https://cdn.jsdelivr.net/npm/@capacitor/core@8.5.3/dist/capacitor.js";
-let smsInbox = null;
 
-// Load Capacitor's JavaScript (only inside the Android app) and connect to our SMS reader.
-async function getSmsInbox() {
+// The Android app builds a small "bridge" into every page it shows (window.Capacitor),
+// which can call our native SMS reader directly. Nothing needs downloading for this.
+function getSmsInbox() {
   if (!IS_ANDROID_APP) throw new Error("Reading SMS only works in the Android app.");
-  if (smsInbox) return smsInbox;
-  if (!window.Capacitor?.registerPlugin) {
-    await new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = CAPACITOR_CORE_URL;
-      script.onload = resolve;
-      script.onerror = () => reject(new Error("Couldn't load the connection to the phone. Check your internet."));
-      document.head.append(script);
-    });
+  const bridge = window.Capacitor;
+  if (!bridge?.nativePromise) {
+    throw new Error("The connection to the phone isn't ready. Close the app fully, reopen it and try again.");
   }
-  smsInbox = window.Capacitor.registerPlugin("SmsInbox");
-  return smsInbox;
+  return {
+    read: (options) => bridge.nativePromise("SmsInbox", "read", options),
+    senders: (options) => bridge.nativePromise("SmsInbox", "senders", options),
+    checkPermissions: () => bridge.nativePromise("SmsInbox", "checkPermissions", {}),
+  };
 }
 
 // Your bank's SMS sender. Messages from anyone else are never read.
@@ -1971,8 +1967,7 @@ async function readBankMessages() {
   const started = Date.now();
 
   try {
-    const plugin = await withTimeout(getSmsInbox(), 20,
-      "Couldn't load the connection to the phone. Check your internet and try again.");
+    const plugin = getSmsInbox();
     const since = startOfMonth(new Date()).getTime();
     // The first time, Android asks whether to allow SMS access.
     const { messages } = await withTimeout(plugin.read({ since, senders: BANK_SENDERS }), 30,
