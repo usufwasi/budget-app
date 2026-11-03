@@ -1928,7 +1928,7 @@ async function getSmsInbox() {
 }
 
 // Your bank's SMS sender. Messages from anyone else are never read.
-const BANK_SENDERS = ["8079", "MBT"];
+const BANK_SENDERS = ["8079", "MBL"];
 
 // Stop waiting for the phone after a while, so the screen never spins forever.
 function withTimeout(promise, seconds, message) {
@@ -1980,8 +1980,8 @@ async function readBankMessages() {
 
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
     $("sms-status").textContent = messages.length
-      ? `${messages.length} ${messages.length === 1 ? "message" : "messages"} from MBT since 1 ${new Date().toLocaleDateString(CONFIG.LOCALE, { month: "long" })} (took ${seconds} s), newest first. Tap Copy to copy one.`
-      : `No messages from MBT since the 1st of this month (took ${seconds} s).`;
+      ? `${messages.length} ${messages.length === 1 ? "message" : "messages"} from MBL since 1 ${new Date().toLocaleDateString(CONFIG.LOCALE, { month: "long" })} (took ${seconds} s), newest first. Tap Copy to copy one.`
+      : `No messages from MBL since the 1st of this month (took ${seconds} s).`;
 
     const list = $("sms-messages");
     for (const m of [...messages].reverse()) {
