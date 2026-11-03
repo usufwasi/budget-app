@@ -483,3 +483,8 @@ label input {
 .cat-usage { margin: 12px 0 0; }
 .cat-extra-actions { display: flex; justify-content: center; gap: 16px; margin-top: 6px; }
 .danger-link { color: var(--expense); }
+
+/* ===== Bank SMS ===== */
+.sms-status { margin: 10px 0 0; }
+.sms-senders { margin-top: 8px; }
+.sms-senders .tx-note { white-space: normal; }

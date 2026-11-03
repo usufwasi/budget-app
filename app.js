@@ -11,7 +11,7 @@
 
    Read top to bottom: setup → helpers → sheets → sign-in → loading data →
    month maths → drawing the screen → add/edit sheet → starting balances →
-   gold → backup → categories → wiring → start
+   gold → backup → categories → Android SMS → wiring → start
    ================================================================= */
 
 // ---------- Setup ----------
@@ -220,7 +220,7 @@ function showError(id, message) {
 
 // ---------- Sheets (the panels that slide up) ----------
 
-const SHEETS = ["entry-sheet", "balances-sheet", "gold-sheet", "asset-sheet", "backup-sheet", "categories-sheet", "category-sheet"];
+const SHEETS = ["entry-sheet", "balances-sheet", "gold-sheet", "asset-sheet", "backup-sheet", "categories-sheet", "category-sheet", "sms-sheet"];
 
 function showSheet(id) {
   for (const sheet of SHEETS) $(sheet).hidden = sheet !== id;
@@ -1902,6 +1902,76 @@ async function deleteCategory() {
 }
 
 
+// ---------- Android app: bank SMS ----------
+
+// True when this page is running inside the Android app rather than a browser.
+// The Android app provides "androidBridge" for talking to its native code.
+const IS_ANDROID_APP = Boolean(window.androidBridge);
+const CAPACITOR_CORE_URL = "https://cdn.jsdelivr.net/npm/@capacitor/core@8.5.3/dist/capacitor.js";
+let smsInbox = null;
+
+// Load Capacitor's JavaScript (only inside the Android app) and connect to our SMS reader.
+async function getSmsInbox() {
+  if (!IS_ANDROID_APP) throw new Error("Reading SMS only works in the Android app.");
+  if (smsInbox) return smsInbox;
+  if (!window.Capacitor?.registerPlugin) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = CAPACITOR_CORE_URL;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("Couldn't load the connection to the phone. Check your internet."));
+      document.head.append(script);
+    });
+  }
+  smsInbox = window.Capacitor.registerPlugin("SmsInbox");
+  return smsInbox;
+}
+
+function openSmsSheet() {
+  $("sms-error").hidden = true;
+  $("sms-status").textContent = "";
+  $("sms-senders").replaceChildren();
+  showSheet("sms-sheet");
+}
+
+async function scanSmsSenders() {
+  $("sms-error").hidden = true;
+  $("sms-senders").replaceChildren();
+  $("sms-status").textContent = "Reading messages…";
+  $("sms-scan").disabled = true;
+
+  try {
+    const plugin = await getSmsInbox();
+    // The first time, Android asks whether to allow SMS access.
+    const { senders } = await plugin.senders({ since: Date.now() - 90 * 86400000 });
+    $("sms-status").textContent = senders.length
+      ? `${senders.length} senders in the last 90 days, most messages first. Your banks are usually near the top.`
+      : "No messages found in the last 90 days.";
+
+    const list = $("sms-senders");
+    for (const s of senders.slice(0, 40)) {
+      const latest = new Date(s.lastDate).toLocaleDateString(CONFIG.LOCALE, { day: "numeric", month: "short" });
+      list.append(makeRow({
+        icon: "✉️",
+        color: "#868E96",
+        name: s.sender,
+        note: `${s.count} ${s.count === 1 ? "message" : "messages"}, latest ${latest}: ${s.preview}`,
+        amountText: "",
+        onClick: () => {},
+      }));
+    }
+  } catch (err) {
+    $("sms-status").textContent = "";
+    const denied = /not allowed|denied/i.test(err.message);
+    showError("sms-error", denied
+      ? "SMS access wasn't allowed. To allow it: open your phone's Settings → Apps → Budget → Permissions → SMS → Allow."
+      : `Couldn't read messages: ${err.message}`);
+  } finally {
+    $("sms-scan").disabled = false;
+  }
+}
+
+
 // ---------- Wiring up buttons ----------
 
 function wireEvents() {
@@ -1909,6 +1979,11 @@ function wireEvents() {
   $("sign-out").addEventListener("click", handleSignOut);
   $("open-balances").addEventListener("click", openBalancesSheet);
   $("open-backup").addEventListener("click", openBackupSheet);
+
+  // Bank SMS (the link only appears in the Android app)
+  $("open-sms").hidden = !IS_ANDROID_APP;
+  $("open-sms").addEventListener("click", openSmsSheet);
+  $("sms-scan").addEventListener("click", scanSmsSenders);
 
   // Categories
   $("open-categories").addEventListener("click", () => openCategoriesSheet());
