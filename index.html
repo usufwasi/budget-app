@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Budget</title>
+  <!-- Makes the app installable, with its own icon -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/favicon.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#EEF1F5" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#10151C" media="(prefers-color-scheme: dark)">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ===== Sign-in screen ===== -->
+  <section id="login-screen" class="screen" hidden>
+    <div class="login-card">
+      <h1>Budget</h1>
+      <p class="muted">Sign in to see your month.</p>
+      <form id="login-form">
+        <label>Email
+          <input type="email" id="login-email" required autocomplete="username">
+        </label>
+        <label>Password
+          <input type="password" id="login-password" required autocomplete="current-password">
+        </label>
+        <p id="login-error" class="error" hidden></p>
+        <button type="submit" id="login-btn" class="btn-primary">Sign in</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== Main app ===== -->
+  <!-- On a phone everything stacks in one column. On a wider screen the summary
+       becomes a band across the top, with two columns underneath. -->
+  <section id="app-screen" class="screen app" hidden>
+    <header class="app-header">
+      <p class="brand">Budget</p>
+      <div class="topbar">
+        <button id="prev-month" class="icon-btn" aria-label="Previous month">‹</button>
+        <h1><button id="month-label" class="month-btn" title="Back to this month">Month</button></h1>
+        <button id="next-month" class="icon-btn" aria-label="Next month">›</button>
+      </div>
+      <!-- Both / Personal / Household -->
+      <nav id="view-tabs" class="segmented view-tabs" aria-label="Which budget to show"></nav>
+      <button id="add-btn-top" class="btn-primary add-top">+ Add</button>
+    </header>
+
+    <section class="summary">
+      <div class="summary-hero">
+        <p id="balance-label" class="muted">Savings now</p>
+        <p id="sum-balance" class="balance">–</p>
+        <p id="sum-change" class="change"></p>
+      </div>
+      <div class="summary-figures">
+        <div class="flow">
+          <div>Brought forward <strong id="sum-forward">–</strong></div>
+          <div><span class="dot income"></span>Income <strong id="sum-income">–</strong></div>
+          <div><span class="dot expense"></span>Spent <strong id="sum-expense">–</strong></div>
+        </div>
+        <p id="sum-transfers" class="muted small transfers-line" hidden></p>
+        <div class="meter" aria-hidden="true"><div id="meter-spent"></div></div>
+        <p id="meter-text" class="muted small"></p>
+      </div>
+    </section>
+
+    <div class="dashboard">
+      <!-- Left column on medium screens; splits into two columns on very wide screens -->
+      <div class="side-column">
+        <div id="col-assets" class="col-assets">
+        <!-- Only shown in the "Both" view -->
+        <section id="sides-card" class="card">
+          <h2>Savings by side</h2>
+          <ul id="sides-list" class="plain-list"></ul>
+        </section>
+
+        <!-- Gold (only shown in the "Both" view) -->
+        <section id="gold-card" class="card" hidden>
+          <div class="card-head">
+            <h2><span class="gold-mark" aria-hidden="true">Au</span>Gold</h2>
+            <button id="gold-manage" class="link-btn small-btn">Manage</button>
+          </div>
+          <div id="gold-empty">
+            <p class="muted">Add the gold you own to see what it's worth today.</p>
+            <button id="gold-add-first" class="btn-secondary wide-btn">Add gold</button>
+          </div>
+          <div id="gold-body">
+            <p class="muted small">Worth today</p>
+            <p id="gold-value" class="gold-value">–</p>
+            <p id="gold-change" class="change"></p>
+            <p id="gold-detail" class="muted small"></p>
+            <div id="gold-chart-wrap" class="gold-chart-wrap">
+              <canvas id="gold-chart" aria-label="Gold price per tola over time"></canvas>
+            </div>
+            <div id="gold-legend" class="legend muted small">
+              <span><i class="key solid"></i>Price per tola</span>
+              <span><i class="key dashed"></i>Your purchase price</span>
+            </div>
+            <p id="gold-chart-note" class="muted small">A chart of the price will appear here once the app has collected a few days of prices.</p>
+            <p id="gold-status" class="muted tiny"></p>
+          </div>
+        </section>
+
+        </div>
+        <div class="col-chart">
+        <section class="card">
+          <h2>Where it went</h2>
+          <div id="chart-wrap" class="chart-wrap">
+            <canvas id="expense-chart" aria-label="Spending by category"></canvas>
+            <div class="chart-center">
+              <span class="muted small">Spent</span>
+              <strong id="chart-total"></strong>
+            </div>
+          </div>
+          <ul id="category-breakdown" class="breakdown"></ul>
+          <p id="chart-empty" class="empty" hidden>No spending recorded this month.</p>
+        </section>
+        </div>
+      </div>
+
+      <!-- Right column on wide screens -->
+      <div class="main-column">
+        <section class="card">
+          <h2>Entries</h2>
+          <div id="transaction-list"></div>
+          <p id="list-empty" class="empty" hidden>Nothing recorded this month. Tap + to add your first entry.</p>
+        </section>
+      </div>
+    </div>
+
+    <footer class="app-footer">
+      <button id="open-balances" class="link-btn">Starting balances</button>
+      <button id="sign-out" class="link-btn">Sign out</button>
+    </footer>
+
+    <button id="add-btn" class="fab" aria-label="Add entry">+</button>
+  </section>
+
+  <div id="sheet-backdrop" class="backdrop" hidden></div>
+
+  <!-- ===== Add / edit: expense, income, or move between sides ===== -->
+  <section id="entry-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+    <form id="entry-form" novalidate>
+      <div class="sheet-head">
+        <h2 id="sheet-title">Add</h2>
+        <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+      </div>
+
+      <div id="mode-tabs" class="segmented three">
+        <button type="button" data-mode="expense">Expense</button>
+        <button type="button" data-mode="income">Income</button>
+        <button type="button" data-mode="move">Move</button>
+      </div>
+
+      <!-- Expense: which side -->
+      <div id="side-picker" class="segmented picker" aria-label="Which side"></div>
+      <!-- Move: which direction -->
+      <div id="move-picker" class="segmented picker stacked" aria-label="Direction"></div>
+
+      <p id="amount-caption" class="field-caption" hidden></p>
+      <label class="amount-field">
+        <span class="currency-symbol"></span>
+        <input id="entry-amount" type="text" inputmode="decimal" placeholder="0" autocomplete="off" aria-label="Amount">
+      </label>
+
+      <!-- Expense categories, or income sources -->
+      <div id="category-chips" class="chips"></div>
+
+      <!-- Income: how it's split between the two sides -->
+      <div id="split-box" class="split-box">
+        <p class="field-caption">Split between sides</p>
+        <div class="split-row">
+          <label><span id="split-label-0">Personal</span>
+            <input id="split-0" type="text" inputmode="decimal" autocomplete="off">
+          </label>
+          <label><span id="split-label-1">Household</span>
+            <input id="split-1" type="text" inputmode="decimal" autocomplete="off">
+          </label>
+        </div>
+        <div class="split-quick">
+          <button type="button" data-split="1" id="split-all-0">All personal</button>
+          <button type="button" data-split="0.5">Half each</button>
+          <button type="button" data-split="0" id="split-all-1">All household</button>
+        </div>
+      </div>
+
+      <label>Date
+        <input type="date" id="entry-date">
+      </label>
+      <label>Note (optional)
+        <input type="text" id="entry-note" maxlength="120">
+      </label>
+
+      <p id="entry-error" class="error" hidden></p>
+
+      <div class="sheet-actions">
+        <button type="button" id="delete-btn" class="btn-danger" hidden>Delete</button>
+        <button type="submit" id="save-btn" class="btn-primary">Save</button>
+      </div>
+      <button type="button" id="save-another-btn" class="link-btn wide">Save and add another</button>
+    </form>
+  </section>
+
+  <!-- ===== Starting balances ===== -->
+  <section id="balances-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="balances-title" hidden>
+    <form id="balances-form" novalidate>
+      <div class="sheet-head">
+        <h2 id="balances-title">Starting balances</h2>
+        <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+      </div>
+      <p class="intro">What each side had saved on the day you started using the app. Everything after that is worked out from your entries.</p>
+      <div id="balances-fields"></div>
+      <p id="balances-error" class="error" hidden></p>
+      <div class="sheet-actions">
+        <button type="submit" id="balances-save" class="btn-primary">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ===== Gold: purchases and local-rate adjustment ===== -->
+  <section id="gold-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="gold-title" hidden>
+    <div class="sheet-head">
+      <h2 id="gold-title"><span class="gold-mark" aria-hidden="true">Au</span>Gold</h2>
+      <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+    </div>
+
+    <h3 class="sub-heading first">Purchases</h3>
+    <ul id="gold-purchases" class="plain-list"></ul>
+    <p id="gold-purchases-empty" class="empty" hidden>No gold added yet.</p>
+    <button type="button" id="gold-add" class="btn-secondary wide-btn">Add a purchase</button>
+
+    <form id="calibrate-form" novalidate>
+      <h3 class="sub-heading">Match the local rate</h3>
+      <p class="muted small">The live price is the international gold price converted to rupees per tola. Local Sarafa rates are usually a little different. Enter today's local 24K rate per tola and the app will stay adjusted to match it.</p>
+      <p id="calibrate-status" class="small calibrate-status"></p>
+      <div class="inline">
+        <input id="calibrate-rate" type="text" inputmode="decimal" autocomplete="off" placeholder="Today's local rate per tola" aria-label="Today's local rate per tola">
+        <button type="submit" id="calibrate-save" class="btn-secondary">Apply</button>
+      </div>
+      <p id="calibrate-error" class="error" hidden></p>
+      <button type="button" id="calibrate-reset" class="link-btn">Use the international price as is</button>
+    </form>
+  </section>
+
+  <!-- ===== Add / edit one gold purchase ===== -->
+  <section id="asset-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="asset-title" hidden>
+    <form id="asset-form" novalidate>
+      <div class="sheet-head">
+        <h2 id="asset-title">Add gold</h2>
+        <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+      </div>
+      <p class="muted small">24K gold. If you bought at different times or prices, add each purchase separately.</p>
+      <label>How much (tola)
+        <input id="asset-qty" type="text" inputmode="decimal" autocomplete="off">
+      </label>
+      <label>Price paid per tola
+        <input id="asset-cost" type="text" inputmode="decimal" autocomplete="off">
+      </label>
+      <label>Date bought (optional)
+        <input id="asset-date" type="date">
+      </label>
+      <label>Note (optional)
+        <input id="asset-note" type="text" maxlength="120">
+      </label>
+      <p id="asset-error" class="error" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" id="asset-delete" class="btn-danger" hidden>Delete</button>
+        <button type="submit" id="asset-save" class="btn-primary">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <!-- Libraries: Supabase (database) and Chart.js (charts) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <!-- Our own code -->
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
