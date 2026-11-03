@@ -134,7 +134,9 @@
     </div>
 
     <footer class="app-footer">
+      <button id="open-categories" class="link-btn">Categories</button>
       <button id="open-balances" class="link-btn">Starting balances</button>
+      <button id="open-backup" class="link-btn">Backup</button>
       <button id="sign-out" class="link-btn">Sign out</button>
     </footer>
 
@@ -271,6 +273,79 @@
       <div class="sheet-actions">
         <button type="button" id="asset-delete" class="btn-danger" hidden>Delete</button>
         <button type="submit" id="asset-save" class="btn-primary">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ===== Backup and export ===== -->
+  <section id="backup-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="backup-title" hidden>
+    <div class="sheet-head">
+      <h2 id="backup-title">Backup and export</h2>
+      <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+    </div>
+    <p class="intro">Supabase's free plan doesn't keep automatic backups, so download a copy now and then and keep it somewhere safe, like Google Drive.</p>
+
+    <button type="button" id="export-csv" class="btn-primary wide-btn">Download spreadsheet (CSV)</button>
+    <p class="muted small export-help">Every entry and every move between sides, one per row. Opens in Excel or Google Sheets.</p>
+
+    <button type="button" id="export-json" class="btn-secondary wide-btn">Download full backup (JSON)</button>
+    <p class="muted small export-help">A complete copy of everything, including categories, starting balances and gold, that could be used to restore the app if ever needed.</p>
+
+    <p id="backup-status" class="small backup-status"></p>
+    <p id="backup-error" class="error" hidden></p>
+  </section>
+
+  <!-- ===== Categories: list for one side (or income sources) ===== -->
+  <section id="categories-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="categories-title" hidden>
+    <div class="sheet-head">
+      <h2 id="categories-title">Categories</h2>
+      <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+    </div>
+    <div id="cat-tabs" class="segmented" aria-label="Which categories"></div>
+    <ul id="cat-list" class="plain-list cat-list"></ul>
+    <button type="button" id="cat-add" class="btn-secondary wide-btn">Add category</button>
+    <p class="muted small cat-help">Use the arrows to change the order they appear in when you add an entry. Hidden categories don't appear when adding entries, but past entries keep them.</p>
+  </section>
+
+  <!-- ===== Add / edit one category ===== -->
+  <section id="category-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="category-title" hidden>
+    <form id="category-form" novalidate>
+      <div class="sheet-head">
+        <h2 id="category-title">Add category</h2>
+        <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+      </div>
+
+      <div class="cat-preview">
+        <span id="cat-preview-icon" class="tx-icon"></span>
+        <span class="cat-preview-text">
+          <strong id="cat-preview-name">New category</strong>
+          <span id="cat-preview-side" class="muted small"></span>
+        </span>
+      </div>
+
+      <label>Name
+        <input id="cat-name" type="text" maxlength="40" autocomplete="off">
+      </label>
+
+      <p class="field-caption">Icon</p>
+      <div id="cat-icons" class="icon-grid"></div>
+      <label>Or type or paste any emoji
+        <input id="cat-icon-custom" type="text" maxlength="8" autocomplete="off">
+      </label>
+
+      <p class="field-caption">Colour</p>
+      <div id="cat-colors" class="color-grid"></div>
+
+      <p id="category-error" class="error" hidden></p>
+      <p id="cat-usage" class="muted small cat-usage"></p>
+
+      <div class="sheet-actions">
+        <button type="button" id="cat-back" class="btn-secondary">Back</button>
+        <button type="submit" id="cat-save" class="btn-primary">Save</button>
+      </div>
+      <div class="cat-extra-actions">
+        <button type="button" id="cat-hide" class="link-btn">Hide</button>
+        <button type="button" id="cat-delete" class="link-btn danger-link">Delete</button>
       </div>
     </form>
   </section>

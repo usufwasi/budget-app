@@ -11,7 +11,7 @@
 
    Read top to bottom: setup → helpers → sheets → sign-in → loading data →
    month maths → drawing the screen → add/edit sheet → starting balances →
-   gold → wiring → start
+   gold → backup → categories → wiring → start
    ================================================================= */
 
 // ---------- Setup ----------
@@ -69,6 +69,9 @@ const state = {
   userId: null,                 // your Supabase user id, once signed in
   gold: emptyGoldState(),
   editingAssetId: null,         // gold purchase being edited (null = adding)
+  catTab: null,                 // categories screen: a side's id, or "income"
+  catEditing: null,             // category being edited (null = adding)
+  catDraft: null,               // icon and colour picked in the category editor
 };
 let chart = null;
 let goldChart = null;
@@ -217,10 +220,11 @@ function showError(id, message) {
 
 // ---------- Sheets (the panels that slide up) ----------
 
-const SHEETS = ["entry-sheet", "balances-sheet", "gold-sheet", "asset-sheet"];
+const SHEETS = ["entry-sheet", "balances-sheet", "gold-sheet", "asset-sheet", "backup-sheet", "categories-sheet", "category-sheet"];
 
 function showSheet(id) {
   for (const sheet of SHEETS) $(sheet).hidden = sheet !== id;
+  $(id).scrollTop = 0; // always open at the top
   $("sheet-backdrop").hidden = false;
 }
 
@@ -229,6 +233,7 @@ function closeSheets() {
   $("sheet-backdrop").hidden = true;
   state.form = null;
   state.editingAssetId = null;
+  state.catEditing = null;
 }
 
 function anySheetOpen() {
@@ -286,6 +291,8 @@ async function enterApp() {
   } catch (err) {
     showToast(`Couldn't load your data: ${err.message}`);
   }
+
+  updateBackupReminder();
 
   // Gold loads separately, so a slow price service never holds up your budget.
   refreshGold();
@@ -1458,12 +1465,468 @@ async function deleteAsset() {
 }
 
 
+// ---------- Backup and export ----------
+
+const BACKUP_REMINDER_DAYS = 30;
+
+function lastBackupDate() {
+  const saved = recall("lastBackup");
+  return saved ? new Date(saved) : null;
+}
+
+// The footer button turns red as a reminder if this device hasn't made a backup in 30 days.
+function updateBackupReminder() {
+  const last = lastBackupDate();
+  const due = !last || (Date.now() - last.getTime()) > BACKUP_REMINDER_DAYS * 86400000;
+  $("open-backup").textContent = due ? "Backup due" : "Backup";
+  $("open-backup").classList.toggle("due", due);
+}
+
+function openBackupSheet() {
+  $("backup-error").hidden = true;
+  const last = lastBackupDate();
+  $("backup-status").textContent = last
+    ? `Last download on this device: ${last.toLocaleDateString(CONFIG.LOCALE, { day: "numeric", month: "long", year: "numeric" })}.`
+    : "No backup downloaded on this device yet.";
+  showSheet("backup-sheet");
+}
+
+// Supabase returns at most 1,000 rows per request, so ask in pages until everything is in.
+async function fetchAll(table, orderColumn = "created_at") {
+  const pageSize = 1000;
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from(table)
+      .select("*")
+      .order(orderColumn)
+      .order(table === "user_settings" ? "user_id" : "id")
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < pageSize) return rows;
+  }
+}
+
+// One spreadsheet cell: quoted if it contains commas, quotes or line breaks.
+function csvCell(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number") return String(value);
+  let text = String(value);
+  // Stop spreadsheet programs treating typed text like "=SUM(...)" as a formula.
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function toCsv(rows) {
+  return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function downloadFile(filename, text, mimeType) {
+  // The invisible character at the start (a "BOM") tells Excel the file is UTF-8,
+  // so emoji and non-English text show correctly.
+  const blob = new Blob([mimeType === "text/csv" ? "\uFEFF" + text : text], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function setBackupBusy(busy) {
+  $("export-csv").disabled = busy;
+  $("export-json").disabled = busy;
+}
+
+function finishBackup(message) {
+  remember("lastBackup", new Date().toISOString());
+  updateBackupReminder();
+  closeSheets();
+  showToast(message);
+}
+
+async function exportCsv() {
+  $("backup-error").hidden = true;
+  setBackupBusy(true);
+  try {
+    const [books, categories, transactions, transfers] = await Promise.all([
+      fetchAll("books"), fetchAll("categories"), fetchAll("transactions"), fetchAll("transfers"),
+    ]);
+    const bookName = (id) => books.find((b) => b.id === id)?.name ?? "";
+    const categoryName = (id) => categories.find((c) => c.id === id)?.name ?? "Uncategorized";
+
+    const rows = [
+      ...transactions.map((t) => ({
+        date: t.occurred_on,
+        created: t.created_at,
+        cells: [
+          t.occurred_on,
+          bookName(t.book_id),
+          t.type === "income" ? "Income" : "Expense",
+          categoryName(t.category_id),
+          t.type === "income" ? Number(t.amount) : -Number(t.amount),
+          t.note,
+          t.status === "pending" ? "Pending" : "Confirmed",
+          t.source,
+        ],
+      })),
+      ...transfers.map((x) => ({
+        date: x.occurred_on,
+        created: x.created_at,
+        cells: [x.occurred_on, `${bookName(x.from_book_id)} → ${bookName(x.to_book_id)}`, "Move", "", Number(x.amount), x.note, "Confirmed", "manual"],
+      })),
+    ].sort((a, b) => (a.date === b.date ? (a.created < b.created ? -1 : 1) : a.date < b.date ? -1 : 1));
+
+    const header = ["Date", "Side", "Type", "Category", `Amount (${CONFIG.CURRENCY})`, "Note", "Status", "Added by"];
+    downloadFile(`budget-entries-${toISODate(new Date())}.csv`, toCsv([header, ...rows.map((r) => r.cells)]), "text/csv");
+    finishBackup(`Downloaded ${rows.length} entries`);
+  } catch (err) {
+    showError("backup-error", `Couldn't export: ${err.message}`);
+  } finally {
+    setBackupBusy(false);
+  }
+}
+
+async function exportJson() {
+  $("backup-error").hidden = true;
+  setBackupBusy(true);
+  try {
+    const [books, categories, transactions, transfers, assets, settings] = await Promise.all([
+      fetchAll("books"), fetchAll("categories"), fetchAll("transactions"),
+      fetchAll("transfers"), fetchAll("assets"), fetchAll("user_settings", "updated_at"),
+    ]);
+    const backup = {
+      app: "Budget",
+      backup_version: 1,
+      exported_at: new Date().toISOString(),
+      books, categories, transactions, transfers, assets, user_settings: settings,
+    };
+    downloadFile(`budget-backup-${toISODate(new Date())}.json`, JSON.stringify(backup, null, 2), "application/json");
+    finishBackup("Full backup downloaded");
+  } catch (err) {
+    showError("backup-error", `Couldn't back up: ${err.message}`);
+  } finally {
+    setBackupBusy(false);
+  }
+}
+
+
+// ---------- Categories ----------
+
+// Emoji chosen because every version of Windows 10 and 11 and Android can display them.
+const CATEGORY_ICONS = [
+  "🏠", "🏡", "💡", "🔌", "💧", "🔥", "📶", "📱", "🧹", "🔧", "🛋️", "🧾",
+  "🛒", "🍽️", "🍔", "☕", "🍕", "🍎", "🥖", "🍰",
+  "🚗", "⛽", "🚌", "🚕", "🏍️", "✈️", "🅿️",
+  "💊", "🏥", "🦷", "📚", "🎓", "✏️", "👶", "🐾",
+  "🛍️", "👕", "👟", "💄", "💇", "🎁", "💍",
+  "🎬", "🎮", "🎵", "📺", "⚽", "🏋️", "🌴", "🎉",
+  "💼", "💰", "💵", "💳", "🏦", "📈", "🏘️", "🤲", "🕌", "➕", "📦",
+];
+const CATEGORY_COLORS = [
+  "#4C6EF5", "#364FC7", "#1098AD", "#0B7285", "#2F9E44", "#0CA678", "#E8A400",
+  "#F08C00", "#E64980", "#C2255C", "#AE3EC9", "#7048E8", "#9C6644", "#868E96",
+];
+
+// All categories on one tab (including hidden ones), in their display order.
+function categoriesForTab(tab) {
+  return state.categories
+    .filter((c) => (tab === "income" ? c.type === "income" : c.type === "expense" && c.book_id === tab))
+    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
+}
+
+function tabLabel(tab) {
+  if (tab === "income") return "Income source";
+  const book = bookById(tab);
+  return book ? `${book.name} expense` : "";
+}
+
+async function reloadCategories() {
+  const { data, error } = await db.from("categories").select("*").order("sort_order");
+  if (error) throw error;
+  state.categories = data;
+  render();
+}
+
+function openCategoriesSheet(tab = null) {
+  const validTab = tab === "income" || isBook(tab);
+  state.catTab = validTab ? tab : (state.view !== "all" ? state.view : state.books[0]?.id);
+  renderCategoriesSheet();
+  showSheet("categories-sheet");
+}
+
+function renderCategoriesSheet() {
+  const options = [
+    ...state.books.map((book) => ({ value: book.id, label: `${book.icon} ${book.name}` })),
+    { value: "income", label: "💼 Income" },
+  ];
+  renderSegmented("cat-tabs", options, state.catTab, (tab) => {
+    state.catTab = tab;
+    renderCategoriesSheet();
+  });
+
+  const list = $("cat-list");
+  list.replaceChildren();
+  const categories = categoriesForTab(state.catTab);
+
+  categories.forEach((category, index) => {
+    const row = makeRow({
+      icon: category.icon,
+      color: category.color,
+      name: category.name,
+      onClick: () => openCategoryEditor(category),
+    });
+    row.classList.add("cat-row");
+    row.classList.toggle("hidden-cat", category.archived);
+    if (category.archived) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "Hidden";
+      row.querySelector(".tx-name").append(tag);
+    }
+
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "order-btn";
+    up.textContent = "↑";
+    up.setAttribute("aria-label", `Move ${category.name} up`);
+    up.disabled = index === 0;
+    up.addEventListener("click", () => moveCategory(category.id, -1));
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.className = "order-btn";
+    down.textContent = "↓";
+    down.setAttribute("aria-label", `Move ${category.name} down`);
+    down.disabled = index === categories.length - 1;
+    down.addEventListener("click", () => moveCategory(category.id, 1));
+
+    row.append(up, down);
+    list.append(row);
+  });
+
+  $("cat-add").textContent = state.catTab === "income" ? "Add income source" : "Add category";
+}
+
+async function moveCategory(id, step) {
+  const categories = categoriesForTab(state.catTab);
+  const from = categories.findIndex((c) => c.id === id);
+  const to = from + step;
+  if (from < 0 || to < 0 || to >= categories.length) return;
+
+  // Swap, then number them 0, 1, 2... and save only the ones whose number changed.
+  [categories[from], categories[to]] = [categories[to], categories[from]];
+  const changed = [];
+  categories.forEach((category, index) => {
+    if (category.sort_order !== index) {
+      category.sort_order = index;
+      changed.push(category);
+    }
+  });
+  renderCategoriesSheet();
+
+  const results = await Promise.all(changed.map((c) =>
+    db.from("categories").update({ sort_order: c.sort_order }).eq("id", c.id)));
+  const failed = results.find((r) => r.error);
+  if (failed) showToast(`Couldn't save the new order: ${failed.error.message}`);
+  try {
+    await reloadCategories();
+  } catch (err) {
+    showToast(`Couldn't reload categories: ${err.message}`);
+  }
+  if (!$("categories-sheet").hidden) renderCategoriesSheet();
+}
+
+// openCategoryEditor() adds a new category to the current tab; openCategoryEditor(category) edits one.
+async function openCategoryEditor(category = null) {
+  state.catEditing = category;
+  state.catDraft = {
+    icon: category?.icon ?? CATEGORY_ICONS[0],
+    color: category?.color ?? CATEGORY_COLORS[0],
+  };
+
+  const noun = state.catTab === "income" ? "income source" : "category";
+  $("category-title").textContent = category ? `Edit ${noun}` : `Add ${noun}`;
+  $("cat-name").value = category?.name ?? "";
+  $("cat-icon-custom").value = CATEGORY_ICONS.includes(state.catDraft.icon) ? "" : state.catDraft.icon;
+  $("cat-preview-side").textContent = tabLabel(state.catTab);
+  $("category-error").hidden = true;
+
+  // Hide and Delete only make sense for an existing category.
+  $("cat-hide").hidden = !category;
+  $("cat-hide").textContent = category?.archived ? "Show again" : "Hide";
+  $("cat-delete").hidden = true;
+  $("cat-usage").textContent = "";
+
+  renderCategoryEditor();
+  showSheet("category-sheet");
+  if (!category) setTimeout(() => $("cat-name").focus(), 60);
+
+  // A category can only be deleted if no entries use it; otherwise it can be hidden.
+  if (category) {
+    const { count, error } = await db
+      .from("transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("category_id", category.id);
+    if (state.catEditing?.id !== category.id) return; // the editor was closed or changed meanwhile
+    if (error) {
+      $("cat-usage").textContent = "Couldn't check whether any entries use this.";
+    } else if (count > 0) {
+      $("cat-usage").textContent = `Used by ${count} ${count === 1 ? "entry" : "entries"}, so it can't be deleted. Hide it instead to stop it appearing when you add entries.`;
+    } else {
+      $("cat-usage").textContent = "No entries use this yet.";
+      $("cat-delete").hidden = false;
+    }
+  }
+}
+
+function renderCategoryEditor() {
+  const draft = state.catDraft;
+  const preview = $("cat-preview-icon");
+  preview.textContent = draft.icon;
+  preview.style.background = `${draft.color}26`;
+  $("cat-preview-name").textContent = $("cat-name").value.trim() || "New category";
+
+  const icons = $("cat-icons");
+  icons.replaceChildren();
+  for (const icon of CATEGORY_ICONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = icon;
+    button.classList.toggle("selected", icon === draft.icon);
+    button.setAttribute("aria-pressed", String(icon === draft.icon));
+    button.addEventListener("click", () => {
+      draft.icon = icon;
+      $("cat-icon-custom").value = "";
+      renderCategoryEditor();
+    });
+    icons.append(button);
+  }
+
+  const colors = $("cat-colors");
+  colors.replaceChildren();
+  for (const color of CATEGORY_COLORS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.style.background = color;
+    button.setAttribute("aria-label", `Colour ${color}`);
+    button.classList.toggle("selected", color === draft.color);
+    button.setAttribute("aria-pressed", String(color === draft.color));
+    button.addEventListener("click", () => {
+      draft.color = color;
+      renderCategoryEditor();
+    });
+    colors.append(button);
+  }
+}
+
+function setCategoryBusy(busy) {
+  for (const id of ["cat-save", "cat-hide", "cat-delete", "cat-back"]) $(id).disabled = busy;
+}
+
+async function finishCategoryChange(message) {
+  const tab = state.catTab;
+  try {
+    await reloadCategories();
+  } catch (err) {
+    showToast(`Couldn't reload categories: ${err.message}`);
+  }
+  showToast(message);
+  openCategoriesSheet(tab);
+}
+
+async function saveCategory(event) {
+  event.preventDefault();
+  $("category-error").hidden = true;
+
+  const name = $("cat-name").value.trim();
+  if (!name) return showError("category-error", "Give it a name.");
+  const editing = state.catEditing;
+  const siblings = categoriesForTab(state.catTab).filter((c) => c.id !== editing?.id);
+  if (siblings.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
+    return showError("category-error", `There's already one called "${name}" here.`);
+  }
+
+  const values = { name, icon: state.catDraft.icon, color: state.catDraft.color };
+  setCategoryBusy(true);
+  const { error } = editing
+    ? await db.from("categories").update(values).eq("id", editing.id)
+    : await db.from("categories").insert({
+        ...values,
+        type: state.catTab === "income" ? "income" : "expense",
+        book_id: state.catTab === "income" ? null : state.catTab,
+        sort_order: siblings.reduce((max, c) => Math.max(max, c.sort_order), -1) + 1,
+      });
+  setCategoryBusy(false);
+  if (error) return showError("category-error", `Couldn't save: ${error.message}`);
+
+  await finishCategoryChange(editing ? "Saved" : `Added ${name}`);
+}
+
+async function toggleCategoryHidden() {
+  const category = state.catEditing;
+  if (!category) return;
+  const hiding = !category.archived;
+
+  // Keep at least one visible category on each tab, so you can always add entries.
+  if (hiding) {
+    const visible = categoriesForTab(state.catTab).filter((c) => !c.archived);
+    if (visible.length <= 1) return showError("category-error", "This is the only visible one here, so it can't be hidden.");
+  }
+
+  setCategoryBusy(true);
+  const { error } = await db.from("categories").update({ archived: hiding }).eq("id", category.id);
+  setCategoryBusy(false);
+  if (error) return showError("category-error", `Couldn't save: ${error.message}`);
+
+  await finishCategoryChange(hiding ? `${category.name} is now hidden` : `${category.name} is visible again`);
+}
+
+async function deleteCategory() {
+  const category = state.catEditing;
+  if (!category) return;
+  if (categoriesForTab(state.catTab).length <= 1) {
+    return showError("category-error", "This is the only one here, so it can't be deleted.");
+  }
+  if (!confirm(`Delete "${category.name}"? This can't be undone.`)) return;
+
+  setCategoryBusy(true);
+  const { error } = await db.from("categories").delete().eq("id", category.id);
+  setCategoryBusy(false);
+  if (error) return showError("category-error", `Couldn't delete: ${error.message}`);
+
+  await finishCategoryChange(`Deleted ${category.name}`);
+}
+
+
 // ---------- Wiring up buttons ----------
 
 function wireEvents() {
   $("login-form").addEventListener("submit", handleLogin);
   $("sign-out").addEventListener("click", handleSignOut);
   $("open-balances").addEventListener("click", openBalancesSheet);
+  $("open-backup").addEventListener("click", openBackupSheet);
+
+  // Categories
+  $("open-categories").addEventListener("click", () => openCategoriesSheet());
+  $("cat-add").addEventListener("click", () => openCategoryEditor());
+  $("category-form").addEventListener("submit", saveCategory);
+  $("cat-back").addEventListener("click", () => openCategoriesSheet(state.catTab));
+  $("cat-hide").addEventListener("click", toggleCategoryHidden);
+  $("cat-delete").addEventListener("click", deleteCategory);
+  $("cat-name").addEventListener("input", renderCategoryEditor);
+  $("cat-icon-custom").addEventListener("input", () => {
+    const typed = $("cat-icon-custom").value.trim();
+    if (typed) {
+      state.catDraft.icon = typed;
+      renderCategoryEditor();
+    }
+  });
+  $("export-csv").addEventListener("click", exportCsv);
+  $("export-json").addEventListener("click", exportJson);
   $("balances-form").addEventListener("submit", saveBalances);
 
   $("prev-month").addEventListener("click", () => changeMonth(-1));

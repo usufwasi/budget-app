@@ -4,7 +4,7 @@
    - The libraries (Supabase, Chart.js) and fonts: use the saved copy, since their versions never change.
    - Your budget data (Supabase) is never saved here; it always comes fresh from the database. */
 
-const CACHE = "budget-v1";
+const CACHE = "budget-v3";
 const APP_FILES = [
   "./",
   "./index.html",
