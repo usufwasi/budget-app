@@ -357,11 +357,11 @@
       <h2 id="sms-title">Bank SMS</h2>
       <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
     </div>
-    <p class="intro">A first check that the app can read your messages. Nothing is saved or sent anywhere yet: this only lists who has sent you messages in the last 90 days, so you can spot your banks.</p>
-    <button type="button" id="sms-scan" class="btn-primary wide-btn">Check messages</button>
+    <p class="intro">Reads only messages from your bank (MBT, 8079) received since the 1st of this month. Nothing is saved or uploaded yet; this is just to check it works and to copy sample messages.</p>
+    <button type="button" id="sms-scan" class="btn-primary wide-btn">Read MBT messages</button>
     <p id="sms-status" class="muted small sms-status"></p>
     <p id="sms-error" class="error" hidden></p>
-    <ul id="sms-senders" class="plain-list sms-senders"></ul>
+    <ul id="sms-messages" class="plain-list sms-messages"></ul>
   </section>
 
   <div id="toast" class="toast" role="status" hidden></div>

@@ -1927,45 +1927,92 @@ async function getSmsInbox() {
   return smsInbox;
 }
 
+// Your bank's SMS sender. Messages from anyone else are never read.
+const BANK_SENDERS = ["8079", "MBT"];
+
+// Stop waiting for the phone after a while, so the screen never spins forever.
+function withTimeout(promise, seconds, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), seconds * 1000)),
+  ]);
+}
+
 function openSmsSheet() {
   $("sms-error").hidden = true;
   $("sms-status").textContent = "";
-  $("sms-senders").replaceChildren();
+  $("sms-messages").replaceChildren();
   showSheet("sms-sheet");
 }
 
-async function scanSmsSenders() {
+// Copy text to the clipboard, with an older method as a fallback for phones that need it.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const box = document.createElement("textarea");
+    box.value = text;
+    box.style.position = "fixed";
+    box.style.opacity = "0";
+    document.body.append(box);
+    box.select();
+    const ok = document.execCommand("copy");
+    box.remove();
+    return ok;
+  }
+}
+
+async function readBankMessages() {
   $("sms-error").hidden = true;
-  $("sms-senders").replaceChildren();
+  $("sms-messages").replaceChildren();
   $("sms-status").textContent = "Reading messages…";
   $("sms-scan").disabled = true;
+  const started = Date.now();
 
   try {
-    const plugin = await getSmsInbox();
+    const plugin = await withTimeout(getSmsInbox(), 20,
+      "Couldn't load the connection to the phone. Check your internet and try again.");
+    const since = startOfMonth(new Date()).getTime();
     // The first time, Android asks whether to allow SMS access.
-    const { senders } = await plugin.senders({ since: Date.now() - 90 * 86400000 });
-    $("sms-status").textContent = senders.length
-      ? `${senders.length} senders in the last 90 days, most messages first. Your banks are usually near the top.`
-      : "No messages found in the last 90 days.";
+    const { messages } = await withTimeout(plugin.read({ since, senders: BANK_SENDERS }), 30,
+      "The phone didn't answer within 30 seconds. If Android didn't ask you about SMS access, close the app fully, reopen it and try again.");
 
-    const list = $("sms-senders");
-    for (const s of senders.slice(0, 40)) {
-      const latest = new Date(s.lastDate).toLocaleDateString(CONFIG.LOCALE, { day: "numeric", month: "short" });
-      list.append(makeRow({
-        icon: "✉️",
-        color: "#868E96",
-        name: s.sender,
-        note: `${s.count} ${s.count === 1 ? "message" : "messages"}, latest ${latest}: ${s.preview}`,
-        amountText: "",
-        onClick: () => {},
-      }));
+    const seconds = ((Date.now() - started) / 1000).toFixed(1);
+    $("sms-status").textContent = messages.length
+      ? `${messages.length} ${messages.length === 1 ? "message" : "messages"} from MBT since 1 ${new Date().toLocaleDateString(CONFIG.LOCALE, { month: "long" })} (took ${seconds} s), newest first. Tap Copy to copy one.`
+      : `No messages from MBT since the 1st of this month (took ${seconds} s).`;
+
+    const list = $("sms-messages");
+    for (const m of [...messages].reverse()) {
+      const item = document.createElement("li");
+      item.className = "sms-message";
+      const head = document.createElement("div");
+      head.className = "sms-message-head";
+      const when = document.createElement("span");
+      when.textContent = new Date(m.date).toLocaleString(CONFIG.LOCALE, {
+        day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+      });
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "link-btn small-btn";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", async () => {
+        showToast(await copyText(m.body) ? "Copied. Remember to replace personal details with X's." : "Couldn't copy. Long-press the text instead.");
+      });
+      head.append(when, copy);
+      const body = document.createElement("p");
+      body.className = "sms-message-body";
+      body.textContent = m.body;
+      item.append(head, body);
+      list.append(item);
     }
   } catch (err) {
     $("sms-status").textContent = "";
     const denied = /not allowed|denied/i.test(err.message);
     showError("sms-error", denied
       ? "SMS access wasn't allowed. To allow it: open your phone's Settings → Apps → Budget → Permissions → SMS → Allow."
-      : `Couldn't read messages: ${err.message}`);
+      : err.message);
   } finally {
     $("sms-scan").disabled = false;
   }
@@ -1983,7 +2030,7 @@ function wireEvents() {
   // Bank SMS (the link only appears in the Android app)
   $("open-sms").hidden = !IS_ANDROID_APP;
   $("open-sms").addEventListener("click", openSmsSheet);
-  $("sms-scan").addEventListener("click", scanSmsSenders);
+  $("sms-scan").addEventListener("click", readBankMessages);
 
   // Categories
   $("open-categories").addEventListener("click", () => openCategoriesSheet());

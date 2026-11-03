@@ -486,5 +486,17 @@ label input {
 
 /* ===== Bank SMS ===== */
 .sms-status { margin: 10px 0 0; }
-.sms-senders { margin-top: 8px; }
-.sms-senders .tx-note { white-space: normal; }
+.sms-messages { margin-top: 12px; }
+.sms-message {
+  padding: 12px; margin-bottom: 10px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg);
+}
+.sms-message-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sms-message-head span { font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.sms-message-body {
+  margin: 8px 0 0;
+  white-space: pre-wrap; word-break: break-word;
+  font-size: 0.92rem;
+  user-select: text;
+}
