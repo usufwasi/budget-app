@@ -51,6 +51,9 @@
       <button id="add-btn-top" class="btn-primary add-top">+ Add</button>
     </header>
 
+    <!-- Appears when bank messages are waiting to be reviewed -->
+    <button id="review-banner" class="review-banner" hidden></button>
+
     <section class="summary">
       <div class="summary-hero">
         <p id="balance-label" class="muted">Savings now</p>
@@ -108,6 +111,16 @@
 
         </div>
         <div class="col-chart">
+        <section id="goals-card" class="card">
+          <div class="card-head">
+            <h2>Savings goals</h2>
+            <button id="goal-add" class="link-btn small-btn">+ Add goal</button>
+          </div>
+          <ul id="goals-list" class="plain-list goals-list"></ul>
+          <p id="goals-empty" class="muted small" hidden>Set a target, like a car or an emergency fund, and see how much to save each month to reach it.</p>
+          <p id="goals-error" class="error" hidden></p>
+        </section>
+
         <section class="card">
           <h2>Where it went</h2>
           <div id="chart-wrap" class="chart-wrap">
@@ -134,7 +147,7 @@
     </div>
 
     <footer class="app-footer">
-      <button id="open-sms" class="link-btn" hidden>Bank SMS</button>
+      <button id="open-sms" class="link-btn">Bank SMS</button>
       <button id="open-categories" class="link-btn">Categories</button>
       <button id="open-balances" class="link-btn">Starting balances</button>
       <button id="open-backup" class="link-btn">Backup</button>
@@ -351,17 +364,127 @@
     </form>
   </section>
 
-  <!-- ===== Bank SMS (only in the Android app) ===== -->
+  <!-- ===== Bank SMS: status and merchant rules ===== -->
   <section id="sms-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sms-title" hidden>
     <div class="sheet-head">
       <h2 id="sms-title">Bank SMS</h2>
       <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
     </div>
-    <p class="intro">Reads only messages from your bank (MBL, 8079) received since the 1st of this month. Nothing is saved or uploaded yet; this is just to check it works and to copy sample messages.</p>
-    <button type="button" id="sms-scan" class="btn-primary wide-btn">Read MBL messages</button>
+    <p id="sms-intro" class="intro"></p>
+    <button type="button" id="sms-check" class="btn-primary wide-btn" hidden>Check for new messages</button>
+    <button type="button" id="sms-review" class="btn-secondary wide-btn" hidden></button>
     <p id="sms-status" class="muted small sms-status"></p>
     <p id="sms-error" class="error" hidden></p>
-    <ul id="sms-messages" class="plain-list sms-messages"></ul>
+
+    <h3 class="sub-heading">Merchant rules</h3>
+    <p class="muted small">When a message mentions one of these names, the side and category are filled in for you. Tick <strong>Remember</strong> while reviewing to add or change one. Tap a rule to delete it.</p>
+    <ul id="sms-rules" class="plain-list sms-rules"></ul>
+    <p id="sms-rules-empty" class="empty" hidden>No rules yet.</p>
+  </section>
+
+  <!-- ===== Review bank transactions, one at a time ===== -->
+  <section id="review-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="review-title" hidden>
+    <div class="sheet-head">
+      <div>
+        <h2 id="review-title">Review bank transaction</h2>
+        <p id="review-progress" class="muted small review-progress"></p>
+      </div>
+      <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+    </div>
+
+    <div class="review-card">
+      <p id="review-amount" class="review-amount"></p>
+      <p id="review-who" class="review-who"></p>
+      <p id="review-meta" class="muted small"></p>
+      <details class="review-original">
+        <summary>Original message</summary>
+        <p id="review-body" class="sms-message-body"></p>
+      </details>
+    </div>
+    <p id="review-rule" class="small review-rule" hidden></p>
+
+    <!-- Money out: which side and category -->
+    <div id="review-out">
+      <div id="review-side" class="segmented picker" aria-label="Which side"></div>
+      <div id="review-categories" class="chips review-chips" aria-label="Category"></div>
+    </div>
+
+    <!-- Money in: which source, and how it's split -->
+    <div id="review-in" hidden>
+      <div id="review-sources" class="chips review-chips" aria-label="Where it came from"></div>
+      <div class="split-box">
+        <p class="field-caption">Split between sides</p>
+        <div class="split-row">
+          <label><span id="review-split-label-0">Personal</span>
+            <input id="review-split-0" type="text" inputmode="decimal" autocomplete="off">
+          </label>
+          <label><span id="review-split-label-1">Household</span>
+            <input id="review-split-1" type="text" inputmode="decimal" autocomplete="off">
+          </label>
+        </div>
+        <div class="split-quick">
+          <button type="button" data-review-split="1" id="review-split-all-0">All personal</button>
+          <button type="button" data-review-split="0.5">Half each</button>
+          <button type="button" data-review-split="0" id="review-split-all-1">All household</button>
+        </div>
+      </div>
+    </div>
+
+    <label>Note
+      <input id="review-note" type="text" maxlength="120">
+    </label>
+
+    <div id="review-remember-row" class="remember-row">
+      <label class="check-label"><input type="checkbox" id="review-remember"> Remember for messages mentioning</label>
+      <input id="review-keyword" type="text" maxlength="40" autocomplete="off" aria-label="Name to remember">
+    </div>
+
+    <p id="review-error" class="error" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="review-skip" class="btn-secondary">Skip</button>
+      <button type="button" id="review-add" class="btn-primary">Add</button>
+    </div>
+    <p class="muted small review-help">Skip it if it isn't really spending or income, like a transfer between your own accounts.</p>
+    <button type="button" id="review-later" class="link-btn wide">Decide later</button>
+  </section>
+
+  <!-- ===== Add / edit a savings goal ===== -->
+  <section id="goal-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="goal-title" hidden>
+    <form id="goal-form" novalidate>
+      <div class="sheet-head">
+        <h2 id="goal-title">New savings goal</h2>
+        <button type="button" class="icon-btn sheet-close" aria-label="Close">×</button>
+      </div>
+
+      <label>What's it for?
+        <input id="goal-name" type="text" maxlength="60" autocomplete="off" placeholder="e.g. Emergency fund, New car">
+      </label>
+
+      <p class="field-caption">Which savings</p>
+      <div id="goal-side" class="segmented picker goal-side" aria-label="Which side"></div>
+
+      <div class="goal-row">
+        <label>Target amount
+          <input id="goal-target" type="text" inputmode="decimal" autocomplete="off">
+        </label>
+        <label>In how many months
+          <input id="goal-months" type="text" inputmode="numeric" autocomplete="off">
+        </label>
+      </div>
+
+      <label>Already saved towards it (optional)
+        <input id="goal-already" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+      </label>
+
+      <div id="goal-preview" class="goal-preview" hidden></div>
+      <p id="goal-side-note" class="muted small" hidden>Changing the side starts tracking this goal afresh from today.</p>
+
+      <p id="goal-error" class="error" hidden></p>
+      <div class="sheet-actions">
+        <button type="button" id="goal-delete" class="btn-danger" hidden>Delete</button>
+        <button type="submit" id="goal-save" class="btn-primary">Save goal</button>
+      </div>
+    </form>
   </section>
 
   <div id="toast" class="toast" role="status" hidden></div>
@@ -371,6 +494,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
   <!-- Our own code -->
   <script src="config.js"></script>
+  <script src="sms-parser.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -486,17 +486,79 @@ label input {
 
 /* ===== Bank SMS ===== */
 .sms-status { margin: 10px 0 0; }
-.sms-messages { margin-top: 12px; }
-.sms-message {
-  padding: 12px; margin-bottom: 10px;
-  border: 1px solid var(--line); border-radius: 12px;
-  background: var(--bg);
-}
-.sms-message-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.sms-message-head span { font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.sms-rules { margin-top: 8px; }
 .sms-message-body {
   margin: 8px 0 0;
   white-space: pre-wrap; word-break: break-word;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   user-select: text;
 }
+
+/* Banner announcing transactions to review */
+.review-banner {
+  display: block; width: 100%;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 0; border-radius: 14px;
+  background: var(--accent); color: var(--accent-ink);
+  font-weight: 700; text-align: left;
+}
+
+/* Review sheet */
+.review-progress { margin: 2px 0 0; }
+.review-card { padding: 16px; border-radius: 14px; background: var(--bg); }
+.review-amount { margin: 0; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.review-amount.income { color: var(--income); }
+.review-who { margin: 4px 0 2px; font-size: 1.1rem; font-weight: 700; word-break: break-word; }
+.review-original { margin-top: 10px; }
+.review-original summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.9rem; }
+.review-rule { margin: 12px 0 0; color: var(--accent); font-weight: 600; }
+.review-chips { margin-top: 12px; }
+.remember-row { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.check-label { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--ink); font-size: 0.92rem; }
+.check-label input { display: inline-block; width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--accent); }
+.remember-row > input {
+  display: block; width: 100%;
+  margin-top: 8px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--ink);
+  font-size: 1rem; font-weight: 600;
+}
+.remember-row > input:disabled { opacity: 0.5; }
+.review-help { margin: 10px 0 0; text-align: center; }
+
+/* ===== Savings goals ===== */
+.goals-list { margin-top: 4px; }
+.goal {
+  display: block; width: 100%;
+  padding: 12px 6px;
+  border: 0; border-top: 1px solid var(--line);
+  background: none; text-align: left;
+}
+.goals-list li:first-child .goal { border-top: 0; }
+.goal:hover { background: var(--bg); border-radius: 12px; }
+.goal-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.goal-name { font-weight: 700; }
+.goal-percent { font-weight: 800; font-variant-numeric: tabular-nums; }
+.goal-bar { height: 8px; margin: 8px 0 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.goal-bar > div { height: 100%; border-radius: 999px; background: var(--income); }
+.goal-bar.behind > div { background: #E8A400; }
+.goal-line { margin: 2px 0 0; color: var(--muted); font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.goal-status { margin: 4px 0 0; font-size: 0.875rem; font-weight: 700; }
+.goal-status.good { color: var(--income); }
+.goal-status.behind { color: #B07A00; }
+.goal-status.late { color: var(--expense); }
+@media (prefers-color-scheme: dark) { .goal-status.behind { color: #F2C14E; } }
+.goals-together {
+  margin: 8px 0 0; padding: 10px 12px;
+  border-radius: 10px; background: var(--bg);
+  font-size: 0.875rem;
+}
+.goal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.goal-side { margin-top: 8px; }
+.goal-preview {
+  margin-top: 16px; padding: 14px;
+  border-radius: 12px; background: var(--bg);
+}
+.goal-preview strong { display: block; font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.goal-preview p { margin: 2px 0 0; color: var(--muted); font-size: 0.9rem; }

@@ -11,7 +11,7 @@
 
    Read top to bottom: setup → helpers → sheets → sign-in → loading data →
    month maths → drawing the screen → add/edit sheet → starting balances →
-   gold → backup → categories → Android SMS → wiring → start
+   gold → backup → categories → bank SMS → savings goals → wiring → start
    ================================================================= */
 
 // ---------- Setup ----------
@@ -220,7 +220,7 @@ function showError(id, message) {
 
 // ---------- Sheets (the panels that slide up) ----------
 
-const SHEETS = ["entry-sheet", "balances-sheet", "gold-sheet", "asset-sheet", "backup-sheet", "categories-sheet", "category-sheet", "sms-sheet"];
+const SHEETS = ["entry-sheet", "balances-sheet", "gold-sheet", "asset-sheet", "backup-sheet", "categories-sheet", "category-sheet", "sms-sheet", "review-sheet", "goal-sheet"];
 
 function showSheet(id) {
   for (const sheet of SHEETS) $(sheet).hidden = sheet !== id;
@@ -234,6 +234,12 @@ function closeSheets() {
   state.form = null;
   state.editingAssetId = null;
   state.catEditing = null;
+  state.goalEditing = null;
+  // Entries were added from bank messages: reload so they show up.
+  if (state.sms?.changed) {
+    state.sms.changed = false;
+    refresh();
+  }
 }
 
 function anySheetOpen() {
@@ -275,6 +281,9 @@ async function handleSignOut() {
   state.broughtForward = new Map();
   state.userId = null;
   state.gold = emptyGoldState();
+  state.sms = emptySmsState();
+  state.goals = emptyGoalsState();
+  renderReviewBanner();
   clearInterval(goldTimer);
   showLogin();
 }
@@ -293,6 +302,10 @@ async function enterApp() {
   }
 
   updateBackupReminder();
+  refreshGoals();
+
+  // Bank messages: read new ones on the phone, then ask about anything waiting.
+  startSms();
 
   // Gold loads separately, so a slow price service never holds up your budget.
   refreshGold();
@@ -319,8 +332,10 @@ async function loadBooks() {
 
   // Label the income split boxes with the sides' names.
   state.books.slice(0, 2).forEach((book, i) => {
-    $(`split-label-${i}`).textContent = `${book.icon} ${book.name}`;
-    $(`split-all-${i}`).textContent = `All ${book.name.toLowerCase()}`;
+    for (const prefix of ["split", "review-split"]) {
+      $(`${prefix}-label-${i}`).textContent = `${book.icon} ${book.name}`;
+      $(`${prefix}-all-${i}`).textContent = `All ${book.name.toLowerCase()}`;
+    }
   });
 }
 
@@ -381,6 +396,7 @@ async function refresh() {
   } catch (err) {
     showToast(`Couldn't load entries: ${err.message}`);
   }
+  refreshGoals();
 }
 
 function changeMonth(step) {
@@ -434,6 +450,7 @@ function render() {
   renderSummary();
   renderSides();
   renderGold();
+  renderGoals();
   // Savings-by-side and gold only appear in "Both"; hide their column otherwise.
   $("col-assets").hidden = state.view !== "all";
   renderChart();
@@ -873,6 +890,24 @@ function renderSegmented(boxId, options, activeValue, onPick) {
     button.setAttribute("aria-pressed", String(isActive));
     button.addEventListener("click", () => onPick(option.value));
     box.append(button);
+  }
+}
+
+// A row of tappable chips (categories, income sources...), with one selected.
+function renderChipList(boxId, items, selectedId, onPick) {
+  const box = $(boxId);
+  box.replaceChildren();
+  for (const item of items) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.textContent = `${item.icon} ${item.name}`;
+    const isSelected = item.id === selectedId;
+    chip.classList.toggle("selected", isSelected);
+    chip.setAttribute("aria-pressed", String(isSelected));
+    chip.style.setProperty("--chip-color", item.color);
+    chip.addEventListener("click", () => onPick(item.id));
+    box.append(chip);
   }
 }
 
@@ -1594,15 +1629,17 @@ async function exportJson() {
   $("backup-error").hidden = true;
   setBackupBusy(true);
   try {
-    const [books, categories, transactions, transfers, assets, settings] = await Promise.all([
+    const [books, categories, transactions, transfers, assets, settings, rules, imports, goals] = await Promise.all([
       fetchAll("books"), fetchAll("categories"), fetchAll("transactions"),
       fetchAll("transfers"), fetchAll("assets"), fetchAll("user_settings", "updated_at"),
+      fetchAll("merchant_rules"), fetchAll("sms_imports"), fetchAll("savings_goals"),
     ]);
     const backup = {
       app: "Budget",
       backup_version: 1,
       exported_at: new Date().toISOString(),
       books, categories, transactions, transfers, assets, user_settings: settings,
+      merchant_rules: rules, sms_imports: imports, savings_goals: goals,
     };
     downloadFile(`budget-backup-${toISODate(new Date())}.json`, JSON.stringify(backup, null, 2), "application/json");
     finishBackup("Full backup downloaded");
@@ -1902,11 +1939,30 @@ async function deleteCategory() {
 }
 
 
-// ---------- Android app: bank SMS ----------
+// ---------- Bank SMS: reading, review and merchant rules ----------
 
 // True when this page is running inside the Android app rather than a browser.
 // The Android app provides "androidBridge" for talking to its native code.
 const IS_ANDROID_APP = Boolean(window.androidBridge);
+
+// Your bank's SMS sender. Messages from anyone else are never read.
+const BANK_SENDERS = ["8079", "MBL"];
+
+// Starter rules, created once. Side and category are matched by name, so if you've renamed
+// a category the rule just suggests the side, and you pick the category the first time.
+const PRESET_RULES = [
+  { keyword: "FOODPANDA", side: "Personal", category: "Food & eating out" },
+  { keyword: "CHEEZIOUS", side: "Personal", category: "Food & eating out" },
+  { keyword: "IESCO", side: "Household", category: "Bills & utilities" },
+  { keyword: "SNGPL", side: "Household", category: "Bills & utilities" },
+  { keyword: "NAYATEL", side: "Household", category: "Bills & utilities" },
+  { keyword: "JAZZ PREPAID", side: "Personal", category: null },
+  { keyword: "UFONE", side: "Personal", category: null },
+];
+
+// Kinds of message where remembering is usually wanted
+// (shops, bills and cash withdrawals, rather than one-off transfers to people).
+const MERCHANT_KINDS = ["Online purchase", "Card purchase", "Bill or top-up", "Cash withdrawal"];
 
 // The Android app builds a small "bridge" into every page it shows (window.Capacitor),
 // which can call our native SMS reader directly. Nothing needs downloading for this.
@@ -1918,15 +1974,11 @@ function getSmsInbox() {
   }
   return {
     read: (options) => bridge.nativePromise("SmsInbox", "read", options),
-    senders: (options) => bridge.nativePromise("SmsInbox", "senders", options),
     checkPermissions: () => bridge.nativePromise("SmsInbox", "checkPermissions", {}),
   };
 }
 
-// Your bank's SMS sender. Messages from anyone else are never read.
-const BANK_SENDERS = ["8079", "MBL"];
-
-// Stop waiting for the phone after a while, so the screen never spins forever.
+// Stop waiting for the phone after a while, so nothing spins forever.
 function withTimeout(promise, seconds, message) {
   return Promise.race([
     promise,
@@ -1934,83 +1986,778 @@ function withTimeout(promise, seconds, message) {
   ]);
 }
 
+function emptySmsState() {
+  return {
+    pending: [],        // messages waiting for review
+    rules: [],          // merchant rules
+    settings: null,     // where the phone got up to
+    index: 0,           // which pending message the review sheet is showing
+    form: null,         // choices on the review sheet
+    changed: false,     // entries were added, so the month needs reloading
+    syncing: false,
+    lastSync: 0,
+  };
+}
+state.sms = emptySmsState();
+
+async function saveSmsSettings(values) {
+  const { error } = await db.from("user_settings").upsert({
+    user_id: state.userId,
+    ...values,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+  state.sms.settings = { ...(state.sms.settings ?? {}), ...values };
+}
+
+// Load what's waiting for review, the rules and the phone's progress (works on any device).
+async function loadSmsData() {
+  const [pending, rules, settings] = await Promise.all([
+    db.from("sms_imports").select("*").eq("status", "pending").order("received_at"),
+    db.from("merchant_rules").select("*").order("keyword"),
+    db.from("user_settings").select("sms_checked_until, sms_rules_seeded").maybeSingle(),
+  ]);
+  for (const result of [pending, rules, settings]) {
+    if (result.error) throw result.error;
+  }
+  state.sms.pending = pending.data;
+  state.sms.rules = rules.data;
+  state.sms.settings = settings.data ?? {};
+
+  if (!state.sms.settings.sms_rules_seeded) await seedPresetRules();
+  renderReviewBanner();
+}
+
+async function seedPresetRules() {
+  const rows = [];
+  for (const preset of PRESET_RULES) {
+    const book = state.books.find((b) => b.name === preset.side);
+    if (!book) continue;
+    const category = preset.category
+      ? state.categories.find((c) => c.type === "expense" && c.book_id === book.id && c.name === preset.category)
+      : null;
+    rows.push({
+      user_id: state.userId,
+      keyword: preset.keyword,
+      direction: "out",
+      action: "categorize",
+      book_id: book.id,
+      category_id: category?.id ?? null,
+    });
+  }
+  if (rows.length) {
+    const { error } = await db.from("merchant_rules")
+      .upsert(rows, { onConflict: "user_id,keyword,direction", ignoreDuplicates: true });
+    if (error) throw error;
+  }
+  await saveSmsSettings({ sms_rules_seeded: true });
+  const { data, error } = await db.from("merchant_rules").select("*").order("keyword");
+  if (error) throw error;
+  state.sms.rules = data;
+}
+
+// On the phone: read new bank messages and save the transactions in them for review.
+// Returns how many transactions were found.
+async function syncSms() {
+  if (!IS_ANDROID_APP || state.sms.syncing) return 0;
+  state.sms.syncing = true;
+  try {
+    // First time: from the 1st of this month. After that: only newer than the last check.
+    const since = Number(state.sms.settings?.sms_checked_until) || startOfMonth(new Date()).getTime();
+    const { messages } = await withTimeout(
+      getSmsInbox().read({ since, senders: BANK_SENDERS }),
+      30,
+      "The phone didn't answer within 30 seconds."
+    );
+
+    let latest = since;
+    const rows = [];
+    for (const message of messages) {
+      latest = Math.max(latest, message.date);
+      const parsed = BankSms.parseBankSms(message.body, message.date);
+      if (!parsed) continue; // not a transaction (OTP, promotion...)
+      const rule = BankSms.matchRule(parsed, state.sms.rules);
+      rows.push({
+        user_id: state.userId,
+        sms_key: BankSms.smsKey(message),
+        sender: message.sender,
+        body: message.body,
+        received_at: new Date(message.date).toISOString(),
+        direction: parsed.direction,
+        amount: parsed.amount,
+        counterparty: parsed.counterparty,
+        kind: parsed.kind,
+        occurred_on: parsed.occurredOn,
+        reference: parsed.reference,
+        status: rule?.action === "ignore" ? "ignored" : "pending",
+      });
+    }
+
+    if (rows.length) {
+      const { error } = await db.from("sms_imports")
+        .upsert(rows, { onConflict: "user_id,sms_key", ignoreDuplicates: true });
+      if (error) throw error;
+    }
+    if (latest > since) await saveSmsSettings({ sms_checked_until: latest });
+    state.sms.lastSync = Date.now();
+    return rows.length;
+  } finally {
+    state.sms.syncing = false;
+  }
+}
+
+// When the app opens: read new messages (on the phone), then ask about anything waiting.
+async function startSms() {
+  try {
+    await loadSmsData();
+    if (IS_ANDROID_APP) {
+      await syncSms();
+      await loadSmsData();
+    }
+    if (state.sms.pending.length && !anySheetOpen()) openReview();
+  } catch (err) {
+    showToast(`Bank SMS: ${err.message}`);
+  }
+}
+
+// Coming back to the app on the phone: check again if it's been more than a minute.
+async function resumeSms() {
+  if (!IS_ANDROID_APP || !state.userId || Date.now() - state.sms.lastSync < 60 * 1000) return;
+  try {
+    const found = await syncSms();
+    await loadSmsData();
+    if (found && state.sms.pending.length && !anySheetOpen()) openReview();
+  } catch (err) {
+    showToast(`Bank SMS: ${err.message}`);
+  }
+}
+
+function renderReviewBanner() {
+  const count = state.sms.pending.length;
+  $("review-banner").hidden = count === 0;
+  $("review-banner").textContent = `📩 ${count} bank ${count === 1 ? "transaction" : "transactions"} to review →`;
+}
+
+// --- The review sheet ---
+
+function openReview() {
+  if (!state.sms.pending.length) return showToast("Nothing to review");
+  state.sms.index = 0;
+  showSheet("review-sheet");
+  renderReviewItem();
+}
+
+function reviewTimeText(item) {
+  const parsed = BankSms.parseBankSms(item.body, Date.parse(item.received_at));
+  const date = parseISODate(item.occurred_on).toLocaleDateString(CONFIG.LOCALE, { weekday: "short", day: "numeric", month: "short" });
+  if (!parsed?.time) return date;
+  const [h, m] = parsed.time.split(":").map(Number);
+  const time = new Date(2000, 0, 1, h, m).toLocaleTimeString(CONFIG.LOCALE, { hour: "numeric", minute: "2-digit" });
+  return `${date}, ${time}`;
+}
+
+function renderReviewItem() {
+  const item = state.sms.pending[state.sms.index];
+  if (!item) {
+    closeSheets();
+    showToast(state.sms.pending.length ? "The rest are saved for later" : "All reviewed");
+    return;
+  }
+
+  const rule = BankSms.matchRule(item, state.sms.rules);
+  const moneyIn = item.direction === "in";
+  const lastBook = recall("lastBook");
+  const f = {
+    item,
+    rule,
+    bookId: rule?.book_id && isBook(rule.book_id) ? rule.book_id : isBook(lastBook) ? lastBook : state.books[0]?.id,
+    categoryId: null,
+    share: null,
+  };
+  if (moneyIn) {
+    f.categoryId = incomeSources().some((c) => c.id === rule?.category_id) ? rule.category_id : null;
+    f.share = rule?.split_share != null ? Number(rule.split_share) : rememberedShare(f.categoryId);
+  } else if (expenseCategories(f.bookId).some((c) => c.id === rule?.category_id)) {
+    f.categoryId = rule.category_id;
+  }
+  state.sms.form = f;
+
+  const total = state.sms.pending.length;
+  $("review-progress").textContent = total > 1 ? `${state.sms.index + 1} of ${total}` : "";
+  $("review-amount").textContent = `${moneyIn ? "+" : "−"}${money.format(Number(item.amount))}`;
+  $("review-amount").classList.toggle("income", moneyIn);
+  $("review-who").textContent = item.counterparty || (moneyIn ? "Money received" : "Payment");
+  $("review-meta").textContent = `${item.kind ?? (moneyIn ? "Money in" : "Money out")} · ${reviewTimeText(item)}`;
+  $("review-body").textContent = item.body;
+  document.querySelector(".review-original").open = false;
+
+  $("review-rule").hidden = !rule;
+  if (rule) {
+    $("review-rule").textContent = rule.action === "ignore"
+      ? `Your rule for ${rule.keyword} says to skip these.`
+      : `Filled in from your rule for ${rule.keyword}.`;
+  }
+
+  $("review-out").hidden = moneyIn;
+  $("review-in").hidden = !moneyIn;
+  $("review-note").value = item.counterparty ?? "";
+  $("review-error").hidden = true;
+
+  // "Remember": ticked for shops and bills that don't have a rule yet.
+  $("review-remember-row").hidden = !item.counterparty;
+  $("review-remember").checked = !rule && MERCHANT_KINDS.includes(item.kind);
+  $("review-keyword").value = rule?.keyword ?? BankSms.suggestKeyword(item.counterparty);
+  $("review-keyword").disabled = !$("review-remember").checked;
+
+  if (moneyIn) {
+    reviewApplyShare(f.share);
+    renderReviewSources();
+  } else {
+    renderReviewSide();
+    renderReviewCategories();
+  }
+  $("review-sheet").scrollTop = 0;
+}
+
+function renderReviewSide() {
+  const f = state.sms.form;
+  const options = state.books.map((book) => ({ value: book.id, label: `${book.icon} ${book.name}` }));
+  renderSegmented("review-side", options, f.bookId, (bookId) => {
+    f.bookId = bookId;
+    if (!expenseCategories(bookId).some((c) => c.id === f.categoryId)) f.categoryId = null;
+    renderReviewSide();
+    renderReviewCategories();
+  });
+}
+
+function renderReviewCategories() {
+  const f = state.sms.form;
+  renderChipList("review-categories", expenseCategories(f.bookId), f.categoryId, (id) => {
+    f.categoryId = id;
+    renderReviewCategories();
+  });
+}
+
+function renderReviewSources() {
+  const f = state.sms.form;
+  renderChipList("review-sources", incomeSources(), f.categoryId, (id) => {
+    f.categoryId = id;
+    if (!f.rule) reviewApplyShare(rememberedShare(id));
+    renderReviewSources();
+  });
+}
+
+// Split the received amount, giving `share` (0 to 1) to the first side.
+function reviewApplyShare(share) {
+  const f = state.sms.form;
+  f.share = share;
+  const total = Number(f.item.amount);
+  const first = round2(total * share);
+  $("review-split-0").value = amountForInput(first);
+  $("review-split-1").value = amountForInput(total - first);
+}
+
+function onReviewSplitInput(index) {
+  const f = state.sms.form;
+  const total = Number(f.item.amount);
+  const typed = parseAmount($(`review-split-${index}`).value);
+  if (!Number.isFinite(typed)) return;
+  $(`review-split-${1 - index}`).value = amountForInput(Math.max(total - typed, 0));
+  const first = index === 0 ? typed : total - typed;
+  f.share = Math.min(Math.max(first / total, 0), 1);
+}
+
+function setReviewBusy(busy) {
+  for (const id of ["review-add", "review-skip", "review-later"]) $(id).disabled = busy;
+}
+
+async function saveRule(values) {
+  const keyword = $("review-keyword").value.trim().toUpperCase();
+  if (!BankSms.normalizeKey(keyword)) throw new Error("Enter a name to remember, or untick Remember.");
+  const { error } = await db.from("merchant_rules").upsert({
+    user_id: state.userId,
+    keyword,
+    direction: state.sms.form.item.direction,
+    split_share: null,
+    book_id: null,
+    category_id: null,
+    ...values,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id,keyword,direction" });
+  if (error) throw error;
+  const rules = await db.from("merchant_rules").select("*").order("keyword");
+  if (!rules.error) state.sms.rules = rules.data;
+}
+
+// Done with the current message: take it off the list and show the next one.
+function finishReviewItem() {
+  state.sms.pending.splice(state.sms.index, 1);
+  renderReviewBanner();
+  renderReviewItem();
+}
+
+async function addReviewed() {
+  const f = state.sms.form;
+  const item = f.item;
+  $("review-error").hidden = true;
+  const note = $("review-note").value.trim() || null;
+  const amount = Number(item.amount);
+  const rememberRule = $("review-remember").checked && !$("review-remember-row").hidden;
+
+  let rows;
+  if (item.direction === "out") {
+    if (!f.categoryId) return showError("review-error", "Pick a category.");
+    rows = [{
+      book_id: f.bookId, type: "expense", amount, category_id: f.categoryId,
+      occurred_on: item.occurred_on, note, source: "sms",
+    }];
+  } else {
+    if (!f.categoryId) return showError("review-error", "Pick where the money came from.");
+    const shares = [0, 1].map((i) => {
+      const text = $(`review-split-${i}`).value.trim();
+      return text === "" ? 0 : parseAmount(text);
+    });
+    if (shares.some((v) => !Number.isFinite(v) || v < 0)) return showError("review-error", "Split amounts must be zero or more.");
+    if (Math.abs(shares[0] + shares[1] - amount) > 0.005) {
+      return showError("review-error", `The split adds up to ${money.format(shares[0] + shares[1])}, but ${money.format(amount)} was received.`);
+    }
+    const splitId = newId();
+    rows = state.books.slice(0, 2).map((book, i) => ({
+      book_id: book.id, type: "income", amount: round2(shares[i]), category_id: f.categoryId,
+      split_id: splitId, occurred_on: item.occurred_on, note, source: "sms",
+    })).filter((row) => row.amount > 0);
+    f.share = shares[0] / amount;
+  }
+
+  setReviewBusy(true);
+  try {
+    const inserted = await db.from("transactions").insert(rows).select("id");
+    if (inserted.error) throw inserted.error;
+    const marked = await db.from("sms_imports")
+      .update({ status: "added", transaction_ids: inserted.data.map((r) => r.id) })
+      .eq("id", item.id);
+    if (marked.error) throw marked.error;
+    state.sms.changed = true;
+
+    if (item.direction === "out") {
+      remember("lastBook", f.bookId);
+      remember(`lastCategory:${f.bookId}`, f.categoryId);
+    } else {
+      remember("lastSource", f.categoryId);
+      remember(`split:${f.categoryId}`, String(f.share));
+    }
+    if (rememberRule) {
+      await saveRule(item.direction === "out"
+        ? { action: "categorize", book_id: f.bookId, category_id: f.categoryId }
+        : { action: "categorize", category_id: f.categoryId, split_share: Math.round(f.share * 1e6) / 1e6 });
+    }
+    showToast("Added");
+    finishReviewItem();
+  } catch (err) {
+    showError("review-error", `Couldn't save: ${err.message}`);
+  } finally {
+    setReviewBusy(false);
+  }
+}
+
+async function skipReviewed() {
+  const item = state.sms.form.item;
+  $("review-error").hidden = true;
+  const rememberRule = $("review-remember").checked && !$("review-remember-row").hidden;
+  setReviewBusy(true);
+  try {
+    const { error } = await db.from("sms_imports").update({ status: "ignored" }).eq("id", item.id);
+    if (error) throw error;
+    if (rememberRule) await saveRule({ action: "ignore" });
+    showToast(rememberRule ? "Skipped, and messages like this will be skipped from now on" : "Skipped");
+    finishReviewItem();
+  } catch (err) {
+    showError("review-error", `Couldn't save: ${err.message}`);
+  } finally {
+    setReviewBusy(false);
+  }
+}
+
+function reviewLater() {
+  state.sms.index += 1;
+  renderReviewItem();
+}
+
+// --- The Bank SMS sheet: status and rules ---
+
 function openSmsSheet() {
   $("sms-error").hidden = true;
-  $("sms-status").textContent = "";
-  $("sms-messages").replaceChildren();
+  renderSmsSheet();
   showSheet("sms-sheet");
 }
 
-// Copy text to the clipboard, with an older method as a fallback for phones that need it.
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const box = document.createElement("textarea");
-    box.value = text;
-    box.style.position = "fixed";
-    box.style.opacity = "0";
-    document.body.append(box);
-    box.select();
-    const ok = document.execCommand("copy");
-    box.remove();
-    return ok;
+function renderSmsSheet() {
+  const checked = Number(state.sms.settings?.sms_checked_until);
+  const lastText = checked
+    ? `Up to date to ${new Date(checked).toLocaleString(CONFIG.LOCALE, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`
+    : "Not checked yet.";
+  $("sms-intro").textContent = IS_ANDROID_APP
+    ? "Each time you open the app, it reads new messages from your bank (MBL, 8079) and asks you about the transactions in them. Messages from anyone else are never read."
+    : "Bank messages are read by the Android app on your phone. Anything it finds waiting for review shows up here too.";
+  $("sms-check").hidden = !IS_ANDROID_APP;
+  $("sms-status").textContent = IS_ANDROID_APP ? lastText : "";
+
+  const count = state.sms.pending.length;
+  $("sms-review").hidden = count === 0;
+  $("sms-review").textContent = `Review ${count} waiting`;
+
+  const list = $("sms-rules");
+  list.replaceChildren();
+  $("sms-rules-empty").hidden = state.sms.rules.length > 0;
+  for (const rule of state.sms.rules) {
+    const book = bookById(rule.book_id);
+    const category = categoryById(rule.category_id);
+    let target;
+    if (rule.action === "ignore") target = "Always skip";
+    else if (rule.direction === "in") {
+      const share = rule.split_share != null ? Math.round(Number(rule.split_share) * 100) : null;
+      target = [category?.name ?? "Pick source", share != null ? `${share}% ${state.books[0]?.name ?? ""}`.trim() : null].filter(Boolean).join(" · ");
+    } else {
+      target = [book?.name, category?.name ?? "pick category"].filter(Boolean).join(" · ");
+    }
+    list.append(makeRow({
+      icon: rule.action === "ignore" ? "🚫" : category?.icon ?? book?.icon ?? "🏷️",
+      color: category?.color ?? book?.color ?? "#868E96",
+      name: rule.keyword,
+      note: `${rule.direction === "in" ? "Money in" : "Money out"} → ${target}`,
+      amountText: "",
+      onClick: () => deleteRule(rule),
+    }));
   }
 }
 
-async function readBankMessages() {
+async function deleteRule(rule) {
+  if (!confirm(`Delete the rule for ${rule.keyword}? Messages mentioning it will no longer be filled in automatically.`)) return;
+  const { error } = await db.from("merchant_rules").delete().eq("id", rule.id);
+  if (error) return showError("sms-error", `Couldn't delete: ${error.message}`);
+  state.sms.rules = state.sms.rules.filter((r) => r.id !== rule.id);
+  renderSmsSheet();
+  showToast("Rule deleted");
+}
+
+async function checkSmsNow() {
   $("sms-error").hidden = true;
-  $("sms-messages").replaceChildren();
-  $("sms-status").textContent = "Reading messages…";
-  $("sms-scan").disabled = true;
-  const started = Date.now();
-
+  $("sms-check").disabled = true;
+  $("sms-status").textContent = "Checking…";
   try {
-    const plugin = getSmsInbox();
-    const since = startOfMonth(new Date()).getTime();
-    // The first time, Android asks whether to allow SMS access.
-    const { messages } = await withTimeout(plugin.read({ since, senders: BANK_SENDERS }), 30,
-      "The phone didn't answer within 30 seconds. If Android didn't ask you about SMS access, close the app fully, reopen it and try again.");
-
-    const seconds = ((Date.now() - started) / 1000).toFixed(1);
-    $("sms-status").textContent = messages.length
-      ? `${messages.length} ${messages.length === 1 ? "message" : "messages"} from MBL since 1 ${new Date().toLocaleDateString(CONFIG.LOCALE, { month: "long" })} (took ${seconds} s), newest first. Tap Copy to copy one.`
-      : `No messages from MBL since the 1st of this month (took ${seconds} s).`;
-
-    const list = $("sms-messages");
-    for (const m of [...messages].reverse()) {
-      const item = document.createElement("li");
-      item.className = "sms-message";
-      const head = document.createElement("div");
-      head.className = "sms-message-head";
-      const when = document.createElement("span");
-      when.textContent = new Date(m.date).toLocaleString(CONFIG.LOCALE, {
-        day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
-      });
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "link-btn small-btn";
-      copy.textContent = "Copy";
-      copy.addEventListener("click", async () => {
-        showToast(await copyText(m.body) ? "Copied. Remember to replace personal details with X's." : "Couldn't copy. Long-press the text instead.");
-      });
-      head.append(when, copy);
-      const body = document.createElement("p");
-      body.className = "sms-message-body";
-      body.textContent = m.body;
-      item.append(head, body);
-      list.append(item);
-    }
+    const found = await syncSms();
+    await loadSmsData();
+    renderSmsSheet();
+    showToast(found ? `Found ${found} new ${found === 1 ? "transaction" : "transactions"}` : "No new transactions");
+    if (state.sms.pending.length) openReview();
   } catch (err) {
-    $("sms-status").textContent = "";
     const denied = /not allowed|denied/i.test(err.message);
     showError("sms-error", denied
       ? "SMS access wasn't allowed. To allow it: open your phone's Settings → Apps → Budget → Permissions → SMS → Allow."
-      : err.message);
+      : `Couldn't check messages: ${err.message}`);
+    renderSmsSheet();
   } finally {
-    $("sms-scan").disabled = false;
+    $("sms-check").disabled = false;
   }
+}
+
+
+// ---------- Savings goals ----------
+
+// A goal: "Emergency fund, Rs 600,000 in 12 months" on one side.
+// Progress = what you'd already saved towards it + how much that side's savings
+// have grown since the goal was set (your leftover each month is your savings).
+
+// Calendar months from one date to another: 4 Nov → 4 Feb is exactly 3,
+// and part-months count by days (4 Nov → 19 Nov is about half a month).
+function calendarMonthsBetween(from, to) {
+  const whole = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  const daysInMonth = new Date(to.getFullYear(), to.getMonth() + 1, 0).getDate();
+  return whole + (to.getDate() - from.getDate()) / daysInMonth;
+}
+
+function emptyGoalsState() {
+  return { list: [], balanceNow: new Map(), loaded: false, error: null };
+}
+state.goals = emptyGoalsState();
+state.goalEditing = null;
+state.goalBook = null;
+
+async function loadGoals() {
+  // Each side's savings right now (everything up to and including today).
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const [goals, balances] = await Promise.all([
+    db.from("savings_goals").select("*").order("created_at"),
+    db.rpc("balances_before", { p_date: toISODate(tomorrow) }),
+  ]);
+  if (goals.error) throw goals.error;
+  if (balances.error) throw balances.error;
+  state.goals.list = goals.data;
+  state.goals.balanceNow = new Map(balances.data.map((row) => [row.book_id, Number(row.balance)]));
+  state.goals.loaded = true;
+  state.goals.error = null;
+}
+
+async function refreshGoals() {
+  try {
+    await loadGoals();
+  } catch (err) {
+    state.goals.error = err.message;
+  }
+  renderGoals();
+}
+
+function monthYear(date) {
+  return date.toLocaleDateString(CONFIG.LOCALE, { month: "short", year: "numeric" });
+}
+
+function goalDeadline(startISO, months) {
+  const start = parseISODate(startISO);
+  return new Date(start.getFullYear(), start.getMonth() + months, start.getDate());
+}
+
+// All the numbers for one goal.
+function goalFigures(goal) {
+  const target = Number(goal.target_amount);
+  const already = Number(goal.already_saved);
+  const months = Number(goal.months);
+  const balance = state.goals.balanceNow.get(goal.book_id) ?? Number(goal.start_balance);
+  const saved = Math.max(0, already + (balance - Number(goal.start_balance)));
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = parseISODate(goal.start_date);
+  const deadline = goalDeadline(goal.start_date, months);
+  const monthsGone = Math.min(Math.max(calendarMonthsBetween(start, today), 0), months);
+  const monthsLeft = Math.max(calendarMonthsBetween(today, deadline), 0);
+
+  const planMonthly = Math.max(target - already, 0) / months; // the plan when you set it
+  const remaining = Math.max(target - saved, 0);
+  // From now on: spread what's left over the months left (all of it if under a month remains).
+  const neededNow = remaining === 0 ? 0 : monthsLeft >= 1 ? remaining / monthsLeft : remaining;
+  // Where the plan says you should be by today.
+  const expected = Math.min(already + planMonthly * monthsGone, target);
+
+  let status;
+  let statusClass;
+  if (remaining === 0) {
+    status = "Reached 🎉";
+    statusClass = "good";
+  } else if (monthsLeft <= 0) {
+    status = `Target date passed, ${money.format(remaining)} still to go`;
+    statusClass = "late";
+  } else if (saved >= expected - 1) {
+    status = "On track";
+    statusClass = "good";
+  } else {
+    status = `Behind plan by ${money.format(expected - saved)}`;
+    statusClass = "behind";
+  }
+
+  return {
+    target, saved, remaining, planMonthly, neededNow, deadline, monthsLeft,
+    percent: Math.min((saved / target) * 100, 100),
+    active: remaining > 0 && monthsLeft > 0,
+    status, statusClass,
+  };
+}
+
+function renderGoals() {
+  const goals = state.goals.list.filter((g) => state.view === "all" || g.book_id === state.view);
+  const list = $("goals-list");
+  list.replaceChildren();
+
+  $("goals-error").hidden = !state.goals.error;
+  if (state.goals.error) {
+    $("goals-error").textContent = `Couldn't load goals: ${state.goals.error}`;
+  }
+  $("goals-empty").hidden = goals.length > 0 || Boolean(state.goals.error);
+
+  for (const goal of goals) {
+    const f = goalFigures(goal);
+    const book = bookById(goal.book_id);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "goal";
+    button.addEventListener("click", () => openGoalSheet(goal));
+
+    const top = document.createElement("div");
+    top.className = "goal-top";
+    const name = document.createElement("span");
+    name.className = "goal-name";
+    name.textContent = state.view === "all" && book ? `${goal.name} · ${book.icon} ${book.name}` : goal.name;
+    const percent = document.createElement("span");
+    percent.className = "goal-percent";
+    percent.textContent = `${Math.floor(f.percent)}%`;
+    top.append(name, percent);
+
+    const bar = document.createElement("div");
+    bar.className = "goal-bar";
+    bar.classList.toggle("behind", f.statusClass !== "good");
+    const fill = document.createElement("div");
+    fill.style.width = `${f.percent}%`;
+    bar.append(fill);
+
+    const progress = document.createElement("p");
+    progress.className = "goal-line";
+    progress.textContent = `${money.format(f.saved)} of ${money.format(f.target)} · by ${monthYear(f.deadline)}`;
+
+    const plan = document.createElement("p");
+    plan.className = "goal-line";
+    if (f.active) {
+      const left = Math.ceil(f.monthsLeft);
+      plan.textContent = `Save ${money.format(f.neededNow)} a month for ${left} more ${left === 1 ? "month" : "months"}`;
+    } else if (f.remaining === 0) {
+      plan.textContent = "Target reached";
+    } else {
+      plan.textContent = "Extend the time or lower the target to make a new plan";
+    }
+
+    const status = document.createElement("p");
+    status.className = `goal-status ${f.statusClass}`;
+    status.textContent = f.status;
+
+    button.append(top, bar, progress, plan, status);
+    const item = document.createElement("li");
+    item.append(button);
+    list.append(item);
+  }
+
+  // Several goals on one side share its savings, so show what they need together.
+  for (const book of state.books) {
+    const active = goals.filter((g) => g.book_id === book.id).map(goalFigures).filter((f) => f.active);
+    if (active.length < 2) continue;
+    const total = active.reduce((sum, f) => sum + f.neededNow, 0);
+    const note = document.createElement("li");
+    note.className = "goals-together";
+    note.textContent = `${book.icon} ${book.name} goals share its savings: together they need about ${money.format(total)} a month.`;
+    list.append(note);
+  }
+}
+
+// --- Add / edit a goal ---
+
+function openGoalSheet(goal = null) {
+  state.goalEditing = goal;
+  state.goalBook = goal?.book_id ?? (state.view !== "all" ? state.view : state.books[0]?.id);
+  $("goal-title").textContent = goal ? "Edit savings goal" : "New savings goal";
+  $("goal-name").value = goal?.name ?? "";
+  $("goal-target").value = goal ? amountForInput(Number(goal.target_amount)) : "";
+  $("goal-months").value = goal ? String(goal.months) : "";
+  $("goal-already").value = goal && Number(goal.already_saved) ? amountForInput(Number(goal.already_saved)) : "";
+  $("goal-error").hidden = true;
+  $("goal-delete").hidden = !goal;
+  $("goal-side-note").hidden = true;
+  renderGoalSide();
+  updateGoalPreview();
+  showSheet("goal-sheet");
+  if (!goal) setTimeout(() => $("goal-name").focus(), 60);
+}
+
+function renderGoalSide() {
+  const options = state.books.map((book) => ({ value: book.id, label: `${book.icon} ${book.name}` }));
+  renderSegmented("goal-side", options, state.goalBook, (bookId) => {
+    state.goalBook = bookId;
+    renderGoalSide();
+    $("goal-side-note").hidden = !(state.goalEditing && bookId !== state.goalEditing.book_id);
+    updateGoalPreview();
+  });
+}
+
+// What the form would save, or null if it isn't complete yet.
+function goalDraft() {
+  const target = parseAmount($("goal-target").value);
+  const monthsText = $("goal-months").value.trim();
+  const months = /^\d+$/.test(monthsText) ? Number(monthsText) : NaN;
+  const alreadyText = $("goal-already").value.trim();
+  const already = alreadyText === "" ? 0 : parseAmount(alreadyText);
+  return { target, months, already };
+}
+
+// Live preview: "Rs 50,000 a month to reach Rs 600,000 by Nov 2027".
+function updateGoalPreview() {
+  const { target, months, already } = goalDraft();
+  const box = $("goal-preview");
+  box.replaceChildren();
+  const valid = target > 0 && months >= 1 && months <= 600 && already >= 0;
+  box.hidden = !valid;
+  if (!valid) return;
+
+  const editing = state.goalEditing;
+  const sameSide = editing && editing.book_id === state.goalBook;
+  const startISO = sameSide ? editing.start_date : toISODate(new Date());
+  const deadline = goalDeadline(startISO, months);
+
+  const headline = document.createElement("strong");
+  const line = document.createElement("p");
+  if (already >= target) {
+    headline.textContent = "Already reached";
+    line.textContent = `You've saved ${money.format(already)} towards a target of ${money.format(target)}.`;
+  } else {
+    headline.textContent = `${money.format((target - already) / months)} a month`;
+    line.textContent = `to reach ${money.format(target)} by ${monthYear(deadline)}${already > 0 ? `, counting the ${money.format(already)} already saved` : ""}.`;
+  }
+  box.append(headline, line);
+
+  // When editing, also show where things stand today.
+  if (sameSide) {
+    const f = goalFigures({ ...editing, target_amount: target, months, already_saved: already });
+    const now = document.createElement("p");
+    now.textContent = f.active
+      ? `So far: ${money.format(f.saved)} saved. From now on that's ${money.format(f.neededNow)} a month.`
+      : f.remaining === 0 ? `So far: ${money.format(f.saved)} saved. Target reached.` : `The target date has passed.`;
+    box.append(now);
+  }
+}
+
+async function saveGoal(event) {
+  event.preventDefault();
+  $("goal-error").hidden = true;
+  const name = $("goal-name").value.trim();
+  const { target, months, already } = goalDraft();
+  if (!name) return showError("goal-error", "Give the goal a name.");
+  if (!(target > 0)) return showError("goal-error", "Enter a target amount greater than zero.");
+  if (!(months >= 1 && months <= 600)) return showError("goal-error", "Enter the number of months as a whole number, from 1 to 600.");
+  if (!(already >= 0)) return showError("goal-error", "Already saved must be zero or more.");
+
+  const editing = state.goalEditing;
+  const row = {
+    book_id: state.goalBook,
+    name,
+    target_amount: round2(target),
+    months,
+    already_saved: round2(already),
+  };
+  // New goal, or moved to the other side: start tracking from today's savings.
+  if (!editing || editing.book_id !== state.goalBook) {
+    row.start_date = toISODate(new Date());
+    row.start_balance = round2(state.goals.balanceNow.get(state.goalBook) ?? 0);
+  }
+
+  $("goal-save").disabled = true;
+  const { error } = editing
+    ? await db.from("savings_goals").update(row).eq("id", editing.id)
+    : await db.from("savings_goals").insert(row);
+  $("goal-save").disabled = false;
+  if (error) return showError("goal-error", `Couldn't save: ${error.message}`);
+
+  closeSheets();
+  showToast(editing ? "Goal saved" : `Goal added: ${name}`);
+  await refreshGoals();
+}
+
+async function deleteGoal() {
+  const goal = state.goalEditing;
+  if (!goal || !confirm(`Delete the goal "${goal.name}"? Your savings aren't affected.`)) return;
+  $("goal-delete").disabled = true;
+  const { error } = await db.from("savings_goals").delete().eq("id", goal.id);
+  $("goal-delete").disabled = false;
+  if (error) return showError("goal-error", `Couldn't delete: ${error.message}`);
+  closeSheets();
+  showToast("Goal deleted");
+  await refreshGoals();
 }
 
 
@@ -2022,10 +2769,34 @@ function wireEvents() {
   $("open-balances").addEventListener("click", openBalancesSheet);
   $("open-backup").addEventListener("click", openBackupSheet);
 
-  // Bank SMS (the link only appears in the Android app)
-  $("open-sms").hidden = !IS_ANDROID_APP;
+  // Savings goals
+  $("goal-add").addEventListener("click", () => openGoalSheet());
+  $("goal-form").addEventListener("submit", saveGoal);
+  $("goal-delete").addEventListener("click", deleteGoal);
+  for (const id of ["goal-target", "goal-months", "goal-already"]) {
+    $(id).addEventListener("input", updateGoalPreview);
+  }
+
+  // Bank SMS and review
   $("open-sms").addEventListener("click", openSmsSheet);
-  $("sms-scan").addEventListener("click", readBankMessages);
+  $("sms-check").addEventListener("click", checkSmsNow);
+  $("sms-review").addEventListener("click", openReview);
+  $("review-banner").addEventListener("click", openReview);
+  $("review-add").addEventListener("click", addReviewed);
+  $("review-skip").addEventListener("click", skipReviewed);
+  $("review-later").addEventListener("click", reviewLater);
+  $("review-remember").addEventListener("change", () => {
+    $("review-keyword").disabled = !$("review-remember").checked;
+  });
+  $("review-split-0").addEventListener("input", () => onReviewSplitInput(0));
+  $("review-split-1").addEventListener("input", () => onReviewSplitInput(1));
+  document.querySelectorAll("[data-review-split]").forEach((button) => {
+    button.addEventListener("click", () => reviewApplyShare(Number(button.dataset.reviewSplit)));
+  });
+  // Coming back to the app on the phone: check for new messages.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") resumeSms();
+  });
 
   // Categories
   $("open-categories").addEventListener("click", () => openCategoriesSheet());
